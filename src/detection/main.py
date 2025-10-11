@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 # Add the src directory to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from src.member2_detection.detection_module import HallucinationDetector, DetectionResult
-from src.member2_detection.gemini_integration import GeminiLLM
+from src.detection.detection_module import HallucinationDetector, DetectionResult
+from src.detection.gemini_integration import GeminiLLM
 
 # Load environment variables
 load_dotenv()

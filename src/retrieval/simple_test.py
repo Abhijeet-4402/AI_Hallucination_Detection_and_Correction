@@ -17,30 +17,30 @@ def test_basic_imports():
     
     try:
         from src.retrieval.retrieval_module import retrieve_evidence, EvidenceRetriever
-        print("✓ retrieval_module imported successfully")
+        print("[OK] retrieval_module imported successfully")
     except ImportError as e:
-        print(f"✗ Failed to import retrieval_module: {e}")
+        print(f"[ERROR] Failed to import retrieval_module: {e}")
         return False
     
     try:
         from src.retrieval.wikipedia_integration import WikipediaRetriever
-        print("✓ wikipedia_integration imported successfully")
+        print("[OK] wikipedia_integration imported successfully")
     except ImportError as e:
-        print(f"✗ Failed to import wikipedia_integration: {e}")
+        print(f"[ERROR] Failed to import wikipedia_integration: {e}")
         return False
     
     try:
         from src.retrieval.vector_database import VectorDatabase
-        print("✓ vector_database imported successfully")
+        print("[OK] vector_database imported successfully")
     except ImportError as e:
-        print(f"✗ Failed to import vector_database: {e}")
+        print(f"[ERROR] Failed to import vector_database: {e}")
         return False
     
     try:
         from src.retrieval.dataset_loader import TruthfulQALoader
-        print("✓ dataset_loader imported successfully")
+        print("[OK] dataset_loader imported successfully")
     except ImportError as e:
-        print(f"✗ Failed to import dataset_loader: {e}")
+        print(f"[ERROR] Failed to import dataset_loader: {e}")
         return False
     
     return True
@@ -52,7 +52,7 @@ def test_detection_integration():
     try:
         # Import detection module
         from src.detection.detection_module import detect_hallucination
-        print("✓ detection module imported successfully")
+        print("[OK] detection module imported successfully")
         
         # Test the integration
         from src.retrieval.retrieval_module import retrieve_evidence
@@ -71,15 +71,15 @@ def test_detection_integration():
         is_hallucination, confidence_score = detect_hallucination(raw_answer, evidence_docs)
         
         print(f"Detection result: hallucination={is_hallucination}, confidence={confidence_score:.3f}")
-        print("✓ Integration with detection module successful")
+        print("[OK] Integration with detection module successful")
         
         return True
         
     except ImportError as e:
-        print(f"✗ Failed to import detection module: {e}")
+        print(f"[ERROR] Failed to import detection module: {e}")
         return False
     except Exception as e:
-        print(f"✗ Integration test failed: {e}")
+        print(f"[ERROR] Integration test failed: {e}")
         return False
 
 def test_file_structure():
@@ -101,9 +101,9 @@ def test_file_structure():
     all_exist = True
     for file_path in required_files:
         if os.path.exists(file_path):
-            print(f"✓ {file_path} exists")
+            print(f"[OK] {file_path} exists")
         else:
-            print(f"✗ {file_path} missing")
+            print(f"[MISSING] {file_path} missing")
             all_exist = False
     
     return all_exist
@@ -130,25 +130,25 @@ def main():
         try:
             if test_func():
                 passed += 1
-                print(f"✓ {test_name} PASSED")
+                print(f"[PASSED] {test_name}")
             else:
-                print(f"✗ {test_name} FAILED")
+                print(f"[FAILED] {test_name}")
         except Exception as e:
-            print(f"✗ {test_name} FAILED with exception: {e}")
+            print(f"[FAILED] {test_name} with exception: {e}")
     
     print(f"\n{'=' * 60}")
     print(f"RESULTS: {passed}/{total} tests passed")
     print(f"{'=' * 60}")
     
     if passed == total:
-        print("🎉 All simple tests passed!")
+        print("[SUCCESS] All simple tests passed!")
         print("\nNext steps:")
         print("1. Install dependencies: pip install -r requirements.txt")
         print("2. Run full test suite: python src/retrieval/test_retrieval.py")
         print("3. Try the demo: python src/retrieval/main.py --mode demo")
         return True
     else:
-        print(f"❌ {total - passed} tests failed.")
+        print(f"[ERROR] {total - passed} tests failed.")
         print("Please check the implementation and file structure.")
         return False
 

@@ -6,9 +6,14 @@ real-time evidence documents based on user questions.
 """
 
 import wikipedia
-import logging
-from typing import List, Dict, Optional
 import re
+import logging
+import warnings
+from bs4 import GuessedAtParserWarning
+from typing import List, Optional
+
+# Suppress the specific parser warning from the wikipedia library
+warnings.filterwarnings("ignore", category=GuessedAtParserWarning)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,24 +22,64 @@ logger = logging.getLogger(__name__)
 class WikipediaRetriever:
     """Handles Wikipedia API integration for evidence retrieval"""
     
-    def __init__(self, language: str = "en", max_results: int = 5):
-        """
-        Initialize Wikipedia retriever
-        
-        Args:
-            language: Wikipedia language code (default: "en")
-            max_results: Maximum number of results to return
-        """
-        self.language = language
+    def __init__(self, max_chars: int = 2000, max_results: int = 3):
+        self.max_chars = max_chars
         self.max_results = max_results
-        wikipedia.set_lang(language)
-        
-        # Set rate limiting to avoid API issues
-        wikipedia.set_rate_limiting(True)
-        
-    def extract_keywords(self, question: str) -> List[str]:
+
+    def retrieve_evidence_documents(self, question: str) -> List[str]:
         """
-        Extract keywords from the question for better search results
+        Retrieve evidence documents from Wikipedia for a given question.
+        This version is more robust to search failures and disambiguation.
+        """
+        logger.info(f"Starting evidence retrieval for question: {question}")
+        
+        documents = []
+        seen_titles = set()
+
+        # First, try a direct page lookup on the most likely subject of the question
+        # This is often the most reliable method for "What is X" questions.
+        try:
+            # A simple regex to find capitalized words, which are often subjects.
+            subjects = re.findall(r'\b[A-Z][a-z]*\b', question)
+            main_subject = subjects[-1] if subjects else question # Default to full question
+            
+            logger.info(f"Attempting direct page lookup for subject: '{main_subject}'")
+            page = wikipedia.page(main_subject, auto_suggest=True, redirect=True)
+            
+            if page.title not in seen_titles:
+                content = page.content[:self.max_chars]
+                documents.append(content)
+                seen_titles.add(page.title)
+                logger.info(f"Added evidence document from direct lookup: {page.title}")
+
+        except Exception as e:
+            logger.warning(f"Direct page lookup failed: {e}. Falling back to search.")
+
+        # Fallback to searching if direct lookup fails or we need more documents
+        if len(documents) < self.max_results:
+            try:
+                search_results = wikipedia.search(question, results=self.max_results)
+                for title in search_results:
+                    if len(documents) >= self.max_results:
+                        break
+                    if title not in seen_titles:
+                        try:
+                            page = wikipedia.page(title, auto_suggest=False, redirect=True)
+                            content = page.content[:self.max_chars]
+                            documents.append(content)
+                            seen_titles.add(page.title)
+                            logger.info(f"Added evidence document from search result: {page.title}")
+                        except Exception as page_e:
+                            logger.warning(f"Could not retrieve page '{title}': {page_e}")
+            except Exception as search_e:
+                logger.error(f"An unexpected error occurred during Wikipedia search: {search_e}")
+
+        logger.info(f"Retrieved {len(documents)} unique evidence documents from Wikipedia.")
+        return documents
+
+    def _extract_keywords(self, question: str) -> List[str]:
+        """
+        Extract keywords from a question for better search results
         
         Args:
             question: User's question
@@ -47,135 +92,75 @@ class WikipediaRetriever:
             'what', 'is', 'are', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 
             'to', 'for', 'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through', 
             'during', 'before', 'after', 'above', 'below', 'between', 'among', 'how', 
-            'when', 'where', 'why', 'who', 'which', 'that', 'this', 'these', 'those'
+            'when', 'where', 'why', 'who', 'which', 'that', 'this', 'these', 'those',
+            'our', 'my', 'your', 'their', 'its', 'some', 'any', 'all', 'every', 'each'
         }
         
         # Clean and split the question
         words = re.findall(r'\b\w+\b', question.lower())
         keywords = [word for word in words if word not in stop_words and len(word) > 2]
         
+        # Prioritize important terms (nouns, proper nouns, etc.)
+        important_keywords = []
+        other_keywords = []
+        
+        for keyword in keywords:
+            # Check if it's a proper noun (capitalized in original question)
+            original_words = re.findall(r'\b\w+\b', question)
+            if keyword.title() in original_words or keyword.upper() in original_words:
+                important_keywords.append(keyword)
+            else:
+                other_keywords.append(keyword)
+        
+        # Combine important keywords first, then others
+        all_keywords = important_keywords + other_keywords
+        
         # Remove duplicates while preserving order
         seen = set()
         unique_keywords = []
-        for keyword in keywords:
+        for keyword in all_keywords:
             if keyword not in seen:
                 seen.add(keyword)
                 unique_keywords.append(keyword)
         
         return unique_keywords[:5]  # Limit to top 5 keywords
     
-    def search_pages(self, query: str) -> List[str]:
+    def _generate_search_queries(self, question: str, keywords: List[str]) -> List[str]:
         """
-        Search for Wikipedia pages related to the query
-        
-        Args:
-            query: Search query
-            
-        Returns:
-            List of page titles
-        """
-        try:
-            logger.info(f"Searching Wikipedia for: {query}")
-            search_results = wikipedia.search(query, results=self.max_results)
-            logger.info(f"Found {len(search_results)} search results")
-            return search_results
-        except Exception as e:
-            logger.error(f"Error searching Wikipedia: {e}")
-            return []
-    
-    def get_page_content(self, page_title: str) -> Optional[str]:
-        """
-        Get the content of a Wikipedia page
-        
-        Args:
-            page_title: Title of the Wikipedia page
-            
-        Returns:
-            Page content or None if error
-        """
-        try:
-            logger.info(f"Fetching content for page: {page_title}")
-            page = wikipedia.page(page_title)
-            
-            # Clean the content - remove references and extra whitespace
-            content = page.content
-            
-            # Remove reference markers like [1], [2], etc.
-            content = re.sub(r'\[\d+\]', '', content)
-            
-            # Remove extra whitespace and newlines
-            content = re.sub(r'\s+', ' ', content).strip()
-            
-            # Limit content length to avoid overwhelming the system
-            if len(content) > 2000:
-                content = content[:2000] + "..."
-            
-            logger.info(f"Retrieved {len(content)} characters of content")
-            return content
-            
-        except wikipedia.exceptions.DisambiguationError as e:
-            logger.warning(f"Disambiguation error for {page_title}: {e}")
-            # Try to get the first option
-            try:
-                page = wikipedia.page(e.options[0])
-                content = page.content
-                content = re.sub(r'\[\d+\]', '', content)
-                content = re.sub(r'\s+', ' ', content).strip()
-                if len(content) > 2000:
-                    content = content[:2000] + "..."
-                return content
-            except Exception as e2:
-                logger.error(f"Error with disambiguation option: {e2}")
-                return None
-                
-        except wikipedia.exceptions.PageError:
-            logger.warning(f"Page not found: {page_title}")
-            return None
-        except Exception as e:
-            logger.error(f"Error fetching page content: {e}")
-            return None
-    
-    def retrieve_evidence_documents(self, question: str) -> List[str]:
-        """
-        Retrieve evidence documents from Wikipedia based on the question
+        Generate a list of search queries from a question and keywords.
         
         Args:
             question: User's question
+            keywords: List of extracted keywords
             
         Returns:
-            List of evidence documents (page contents)
+            List of search queries
         """
-        logger.info(f"Starting evidence retrieval for question: {question}")
+        search_queries = []
         
-        # Extract keywords from the question
-        keywords = self.extract_keywords(question)
-        logger.info(f"Extracted keywords: {keywords}")
+        # Add the full question first
+        search_queries.append(question)
         
-        evidence_docs = []
+        # Add specific combinations for better targeting
+        if len(keywords) >= 2:
+            # Combine top keywords for more specific searches
+            search_queries.append(f"{keywords[0]} {keywords[1]}")
+            if len(keywords) >= 3:
+                search_queries.append(f"{keywords[0]} {keywords[1]} {keywords[2]}")
         
-        # Search using the full question first
-        search_queries = [question] + keywords
+        # Add individual important keywords
+        search_queries.extend(keywords[:3])  # Only top 3 individual keywords
         
+        # Remove duplicates while preserving order
+        seen_queries = set()
+        unique_queries = []
         for query in search_queries:
-            if len(evidence_docs) >= self.max_results:
-                break
-                
-            # Search for pages
-            page_titles = self.search_pages(query)
-            
-            # Get content for each page
-            for page_title in page_titles:
-                if len(evidence_docs) >= self.max_results:
-                    break
-                    
-                content = self.get_page_content(page_title)
-                if content and content not in evidence_docs:  # Avoid duplicates
-                    evidence_docs.append(content)
-                    logger.info(f"Added evidence document from: {page_title}")
+            if query.lower() not in seen_queries:
+                seen_queries.add(query.lower())
+                unique_queries.append(query)
         
-        logger.info(f"Retrieved {len(evidence_docs)} evidence documents")
-        return evidence_docs
-    
+        return unique_queries
+
     def get_page_summary(self, page_title: str) -> Optional[str]:
         """
         Get a summary of a Wikipedia page

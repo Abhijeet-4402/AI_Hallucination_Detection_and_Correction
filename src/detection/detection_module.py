@@ -8,13 +8,32 @@ This module implements the two-step hallucination detection process:
 
 import numpy as np
 from typing import List, Tuple, Dict, Any
-from sentence_transformers import SentenceTransformer
-from transformers import pipeline
+from sentence_transformers import SentenceTransformer, util
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import logging
+import torch
+from nltk.tokenize import sent_tokenize
+import nltk
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging FIRST, so the logger is available for all subsequent calls.
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Download the necessary NLTK tokenizer models if they are not already present.
+# This prevents LookupError during runtime.
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    logger.info("NLTK 'punkt' resource not found. Downloading...")
+    nltk.download('punkt')
+
+# The traceback indicates that 'punkt_tab' is also required by the tokenizer.
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    logger.info("NLTK 'punkt_tab' resource not found. Downloading...")
+    nltk.download('punkt_tab')
+
 
 class DetectionResult:
     """Container for detection results"""
@@ -37,157 +56,112 @@ class DetectionResult:
         }
 
 class HallucinationDetector:
-    """Main class for detecting hallucinations in AI-generated text"""
+    """Main class for hallucination detection"""
     
-    def __init__(self, similarity_threshold: float = 0.7):
+    def __init__(self, 
+                 similarity_model: str = "all-MiniLM-L6-v2",
+                 nli_model: str = "roberta-large-mnli",
+                 similarity_threshold: float = 0.5,
+                 contradiction_threshold: float = 0.98,
+                 entailment_threshold: float = 0.95, # New threshold for positive confirmation
+                 device: str = "cpu"):
         """
-        Initialize the hallucination detector
+        Initialize the HallucinationDetector
         
         Args:
-            similarity_threshold: Threshold for semantic similarity (0-1)
+            similarity_model: Sentence-transformer model for similarity
+            nli_model: NLI model for contradiction detection
+            similarity_threshold: Threshold below which an answer is a hallucination
+            contradiction_threshold: NLI score above which an answer is a contradiction
+            entailment_threshold: NLI score above which an answer is confirmed by evidence
+            device: "cpu" or "cuda"
         """
+        self.similarity_model_name = similarity_model
+        self.nli_model_name = nli_model
         self.similarity_threshold = similarity_threshold
-        self.similarity_model = None
-        self.nli_pipeline = None
-        self._load_models()
-    
-    def _load_models(self):
+        self.contradiction_threshold = contradiction_threshold
+        self.entailment_threshold = entailment_threshold # Store the new threshold
+        self.device = device
+        self._load_models(similarity_model, nli_model)
+
+    def detect_hallucination(self, answer: str, evidence_docs: List[str]) -> DetectionResult:
+        """
+        Detects if an answer is a hallucination based on evidence using an entailment-first approach.
+        """
+        if not evidence_docs:
+            logger.warning("No evidence provided. Cannot verify answer.")
+            return DetectionResult(True, 1.0, "no_evidence", answer, [])
+
+        # NLI model output order is [contradiction, neutral, entailment]
+        ENTAILMENT_INDEX = 2
+        CONTRADICTION_INDEX = 0
+
+        # 1. Check for Entailment (Positive Confirmation) first
+        for doc in evidence_docs:
+            sentences = sent_tokenize(doc)
+            for sentence in sentences:
+                premise = sentence
+                hypothesis = answer
+                
+                tokenized_input = self.nli_tokenizer(premise, hypothesis, return_tensors='pt', truncation=True, max_length=512).to(self.device)
+                with torch.no_grad():
+                    logits = self.nli_model(**tokenized_input).logits
+                
+                probs = torch.softmax(logits, dim=1)[0]
+                entailment_prob = probs[ENTAILMENT_INDEX].item()
+
+                if entailment_prob > self.entailment_threshold:
+                    logger.info(f"Entailment detected with score {entailment_prob:.3f}. The answer is supported by evidence.")
+                    return DetectionResult(False, entailment_prob, "entailment", answer, evidence_docs)
+
+        # 2. If no entailment, check for Contradiction
+        for doc in evidence_docs:
+            sentences = sent_tokenize(doc)
+            for sentence in sentences:
+                premise = sentence
+                hypothesis = answer
+                
+                tokenized_input = self.nli_tokenizer(premise, hypothesis, return_tensors='pt', truncation=True, max_length=512).to(self.device)
+                with torch.no_grad():
+                    logits = self.nli_model(**tokenized_input).logits
+                
+                probs = torch.softmax(logits, dim=1)[0]
+                contradiction_prob = probs[CONTRADICTION_INDEX].item()
+                
+                if contradiction_prob > self.contradiction_threshold:
+                    logger.info(f"Contradiction detected with score {contradiction_prob:.3f}")
+                    return DetectionResult(True, contradiction_prob, "contradiction", answer, evidence_docs)
+
+        # 3. If no strong NLI signal, fall back to semantic similarity
+        combined_evidence = "\n".join(evidence_docs)
+        answer_embedding = self.similarity_model.encode(answer, convert_to_tensor=True)
+        evidence_embedding = self.similarity_model.encode(combined_evidence, convert_to_tensor=True)
+        
+        similarity_score = util.pytorch_cos_sim(answer_embedding, evidence_embedding).item()
+        
+        if similarity_score < self.similarity_threshold:
+            logger.info(f"Low similarity detected. Score: {similarity_score:.3f}")
+            return DetectionResult(True, 1 - similarity_score, "low_similarity", answer, evidence_docs)
+            
+        # 4. If all checks pass, it's not a hallucination
+        logger.info(f"No strong hallucination signal found. Similarity score: {similarity_score:.3f}")
+        return DetectionResult(False, similarity_score, "no_hallucination", answer, evidence_docs)
+
+    def _load_models(self, similarity_model_name: str, nli_model_name: str):
         """Load the required ML models"""
         try:
-            logger.info("Loading semantic similarity model...")
-            self.similarity_model = SentenceTransformer('all-MiniLM-L6-v2')
+            logger.info(f"Loading semantic similarity model: {similarity_model_name}")
+            self.similarity_model = SentenceTransformer(similarity_model_name)
             
-            logger.info("Loading NLI model for contradiction detection...")
-            self.nli_pipeline = pipeline(
-                "text-classification",
-                model="roberta-large-mnli",
-                return_all_scores=True
-            )
+            logger.info(f"Loading NLI model: {nli_model_name}")
+            self.nli_tokenizer = AutoTokenizer.from_pretrained(nli_model_name)
+            self.nli_model = AutoModelForSequenceClassification.from_pretrained(nli_model_name).to(self.device)
+            
             logger.info("Models loaded successfully!")
             
         except Exception as e:
             logger.error(f"Error loading models: {e}")
             raise
-    
-    def check_similarity(self, raw_answer: str, evidence_docs: List[str]) -> float:
-        """
-        Check semantic similarity between answer and evidence documents
-        
-        Args:
-            raw_answer: The generated answer to check
-            evidence_docs: List of evidence documents
-            
-        Returns:
-            Highest cosine similarity score (0-1)
-        """
-        if not evidence_docs:
-            logger.warning("No evidence documents provided for similarity check")
-            return 0.0
-        
-        try:
-            # Generate embeddings
-            answer_embedding = self.similarity_model.encode([raw_answer])
-            evidence_embeddings = self.similarity_model.encode(evidence_docs)
-            
-            # Calculate cosine similarities
-            similarities = []
-            for evidence_emb in evidence_embeddings:
-                similarity = np.dot(answer_embedding[0], evidence_emb) / (
-                    np.linalg.norm(answer_embedding[0]) * np.linalg.norm(evidence_emb)
-                )
-                similarities.append(similarity)
-            
-            max_similarity = max(similarities)
-            logger.info(f"Maximum similarity score: {max_similarity:.3f}")
-            return float(max_similarity)
-            
-        except Exception as e:
-            logger.error(f"Error in similarity check: {e}")
-            return 0.0
-    
-    def check_contradiction(self, raw_answer: str, evidence_docs: List[str]) -> bool:
-        """
-        Check for contradictions using Natural Language Inference
-        
-        Args:
-            raw_answer: The generated answer to check
-            evidence_docs: List of evidence documents
-            
-        Returns:
-            True if contradiction is detected, False otherwise
-        """
-        if not evidence_docs:
-            logger.warning("No evidence documents provided for contradiction check")
-            return False
-        
-        try:
-            contradictions_found = 0
-            
-            for evidence in evidence_docs:
-                # Create premise-hypothesis pair for NLI
-                premise = evidence
-                hypothesis = raw_answer
-                
-                # Get NLI predictions
-                results = self.nli_pipeline(f"{premise} [SEP] {hypothesis}")
-                
-                # Check for contradiction (label index 2 in roberta-large-mnli)
-                for result in results:
-                    if result['label'] == 'CONTRADICTION' and result['score'] > 0.5:
-                        contradictions_found += 1
-                        logger.info(f"Contradiction detected with score: {result['score']:.3f}")
-                        break
-            
-            has_contradiction = contradictions_found > 0
-            logger.info(f"Contradiction check result: {has_contradiction}")
-            return has_contradiction
-            
-        except Exception as e:
-            logger.error(f"Error in contradiction check: {e}")
-            return False
-    
-    def detect_hallucination(self, raw_answer: str, evidence_docs: List[str]) -> DetectionResult:
-        """
-        Main detection function that combines both methods
-        
-        Args:
-            raw_answer: The generated answer to check
-            evidence_docs: List of evidence documents
-            
-        Returns:
-            DetectionResult object with detection outcome
-        """
-        logger.info("Starting hallucination detection...")
-        logger.info(f"Answer to check: {raw_answer[:100]}...")
-        logger.info(f"Number of evidence documents: {len(evidence_docs)}")
-        
-        # Step 1: Check for contradictions using NLI
-        has_contradiction = self.check_contradiction(raw_answer, evidence_docs)
-        
-        # Step 2: Check semantic similarity
-        similarity_score = self.check_similarity(raw_answer, evidence_docs)
-        
-        # Determine if hallucination is detected
-        is_hallucination = has_contradiction or (similarity_score < self.similarity_threshold)
-        
-        # Determine which method triggered the detection
-        if has_contradiction:
-            detection_method = "contradiction_detected"
-        elif similarity_score < self.similarity_threshold:
-            detection_method = "low_similarity"
-        else:
-            detection_method = "no_hallucination"
-        
-        result = DetectionResult(
-            is_hallucination=is_hallucination,
-            confidence_score=similarity_score,
-            detection_method=detection_method,
-            raw_answer=raw_answer,
-            evidence_docs=evidence_docs
-        )
-        
-        logger.info(f"Detection complete. Result: {result.to_dict()}")
-        return result
 
 # Global detector instance
 _detector = None
