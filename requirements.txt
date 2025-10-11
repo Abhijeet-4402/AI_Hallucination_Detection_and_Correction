@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Core AI and ML libraries
 google-generativeai>=0.8.0
 langchain>=0.1.0
@@ -24,4 +25,31 @@ pytest>=7.0.0
 pytest-cov>=4.0.0
 
 # Optional: For better performance
+=======
+# Core AI and ML libraries
+google-generativeai>=0.3.0
+langchain>=0.1.0
+sentence-transformers>=2.2.0
+transformers>=4.30.0
+torch>=2.0.0
+
+# Data processing and utilities
+numpy>=1.24.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+
+# Retrieval Module Dependencies
+datasets>=2.14.0
+wikipedia>=1.4.0
+chromadb>=0.4.0
+
+# Environment and configuration
+python-dotenv>=1.0.0
+
+# Testing and development
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Optional: For better performance
+>>>>>>> fb3451155c14f135a09046a366815aba1850f393
 accelerate>=0.20.0
