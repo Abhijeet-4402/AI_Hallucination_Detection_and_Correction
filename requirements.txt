@@ -1,28 +1,25 @@
 # Core AI and ML libraries
-google-generativeai>=0.8.0
-langchain>=0.1.0
-langchain-google-genai>=2.1.0
-sentence-transformers>=2.2.0
-transformers>=4.30.0
-torch>=2.0.0
+langchain
+langchain-google-genai
+sentence-transformers
+transformers
+torch
+accelerate
 
 # Data processing and utilities
-numpy>=1.24.0
-scikit-learn>=1.3.0
-pandas>=2.0.0
+numpy
+scikit-learn
+pandas
 
 # Retrieval Module Dependencies
-datasets>=2.14.0
-wikipedia>=1.4.0
-chromadb>=0.4.0
+datasets
+wikipedia
+chromadb
+nltk
+beautifulsoup4
 
 # Environment and configuration
-python-dotenv>=1.0.0
+python-dotenv
 
-# Testing and development
-pytest>=7.0.0
-pytest-cov>=4.0.0
-
-# Optional: For better performance
-
-accelerate>=0.20.0
+# For progress bars
+tqdm

@@ -8,7 +8,8 @@ This module is responsible for:
 3. Providing detection results to other modules
 """
 
-from .detection_module import detect_hallucination, DetectionResult
+from .detection_module import  DetectionResult
 from .gemini_integration import GeminiLLM
+from .detection_module import HallucinationDetector
 
-__all__ = ['detect_hallucination', 'DetectionResult', 'GeminiLLM']
+__all__ = ['DetectionResult', 'GeminiLLM', 'HallucinationDetector']

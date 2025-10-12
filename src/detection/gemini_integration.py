@@ -1,5 +1,6 @@
 """
-Fallback Gemini integration that handles API issues gracefully, including rate limits.
+Fallback Gemini integration that uses the LangChain wrapper for consistency.
+This version includes robust retry logic and configurable model selection.
 """
 
 import os
@@ -7,7 +8,9 @@ import logging
 import time
 from typing import Optional
 from dotenv import load_dotenv
-import google.generativeai as genai
+
+# Import the LangChain component and specific exceptions for better error handling
+from langchain_google_genai import ChatGoogleGenerativeAI
 from google.api_core import exceptions
 
 # Load environment variables
@@ -18,87 +21,91 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 class GeminiLLM:
-    """Fallback Gemini LLM that handles API issues gracefully"""
+    """Fallback Gemini LLM using the LangChain wrapper with enhanced robustness."""
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, 
+                 api_key: Optional[str] = None, 
+                 model_name: Optional[str] = None):
         """
-        Initializes the Gemini LLM, finds a working model, and sets up a fallback.
+        Initializes the Gemini LLM via LangChain.
+        
+        Args:
+            api_key: The Google API key. Defaults to GEMINI_API_KEY from .env.
+            model_name: The model to use (e.g., 'gemini-1.5-pro-latest'). Defaults to GEMINI_MODEL from .env or 'gemini-pro'.
         """
-        logger.info("Initializing Gemini LLM...")
+        logger.info("Initializing Gemini LLM via LangChain...")
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.model_name = model_name or os.getenv("GEMINI_MODEL", "gemini-pro")
         self.model = None
         self.api_working = False
         self._initialize_llm()
 
     def _initialize_llm(self):
         """
-        Configures the API and dynamically finds a supported generative model.
+        Configures the LangChain ChatGoogleGenerativeAI model.
         """
         if not self.api_key:
             logger.error("GEMINI_API_KEY not found. Cannot initialize Gemini LLM.")
             return
 
         try:
-            genai.configure(api_key=self.api_key)
-            
-            supported_model_name = None
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    supported_model_name = m.name
-                    break
-            
-            if supported_model_name:
-                logger.info(f"Found supported model: {supported_model_name}")
-                self.model = genai.GenerativeModel(supported_model_name)
-                self.api_working = True
-                logger.info("Gemini LLM initialized successfully.")
-            else:
-                logger.warning("No model supporting 'generateContent' found for your API key.")
-                self.use_fallback("No supported model found.")
+            # Use the LangChain class to initialize the model with the configurable name
+            self.model = ChatGoogleGenerativeAI(
+                model=self.model_name, 
+                google_api_key=self.api_key,
+                convert_system_message_to_human=True
+            )
+            # A simple, low-cost API call to verify credentials and model access.
+            self.model.invoke("test") 
+            self.api_working = True
+            logger.info(f"Gemini LLM ({self.model_name}) initialized successfully via LangChain.")
 
         except Exception as e:
-            logger.warning(f"Gemini API not available: {e}")
+            logger.warning(f"Gemini API is not available or failed to initialize: {e}")
             self.use_fallback(str(e))
 
     def use_fallback(self, reason: str):
         """Switches to fallback mode and logs the reason."""
         self.api_working = False
-        logger.info(f"Using fallback mode - will return placeholder responses. Reason: {reason}")
+        logger.warning(f"Switching to fallback mode. Reason: {reason}")
 
     def generate_answer(self, question: str, max_retries: int = 3) -> str:
         """
-        Generates an answer using the Gemini model, with retries for rate limit errors.
+        Generates an answer using the LangChain model with exponential backoff for retries.
         """
         if not self.api_working or not self.model:
-            return "Error: Unable to access Gemini API. Please check configuration and API key."
+            return "Error: Unable to access Gemini API. Please check your configuration and API key."
 
         last_exception = None
         for attempt in range(max_retries):
             try:
-                response = self.model.generate_content(question)
-                return response.text.strip().replace('\n', ' ')
+                # Use the .invoke() method for LangChain
+                response = self.model.invoke(question)
+                return response.content.strip()
             except exceptions.ResourceExhausted as e:
-                logger.warning(f"Rate limit exceeded (Attempt {attempt + 1}/{max_retries}). Waiting to retry...")
+                wait_time = (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                logger.warning(f"Rate limit exceeded. Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})")
                 last_exception = e
-                # Use the suggested retry delay from the API error if available, otherwise use exponential backoff
-                retry_delay = e.retry_delay if hasattr(e, 'retry_delay') and e.retry_delay else (2 ** attempt) * 5
-                time.sleep(retry_delay + 1) # Add a small buffer to be safe
+                time.sleep(wait_time)
             except Exception as e:
-                logger.error(f"An unexpected error occurred during Gemini content generation: {e}")
-                return f"Error: Failed to generate answer from API. {e}"
-        
-        logger.error(f"Failed to get answer after {max_retries} retries due to persistent rate limiting.")
-        return f"Error: Failed to generate answer from API after multiple retries. Last error: {last_exception}"
+                logger.error(f"An unexpected error occurred during content generation: {e}")
+                last_exception = e
+                break # Don't retry on unexpected errors
 
-# Global Gemini instance
-_gemini_llm = None
+        error_message = f"Error: Failed to generate answer from API after {max_retries} retries."
+        if last_exception:
+            error_message += f" Last error: {last_exception}"
+        return error_message
+
+# A more robust singleton pattern
+_gemini_llm_instance = None
 
 def get_gemini_llm() -> GeminiLLM:
     """Singleton pattern to get the global Gemini LLM instance."""
-    global _gemini_llm
-    if _gemini_llm is None:
-        _gemini_llm = GeminiLLM()
-    return _gemini_llm
+    global _gemini_llm_instance
+    if _gemini_llm_instance is None:
+        _gemini_llm_instance = GeminiLLM()
+    return _gemini_llm_instance
 
 def generate_answer(question: str) -> str:
     """Convenience function to generate an answer using the global instance."""

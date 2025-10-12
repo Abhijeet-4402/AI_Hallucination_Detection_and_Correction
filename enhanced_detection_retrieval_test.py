@@ -13,11 +13,15 @@ import logging
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-# Add the src directory to the path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+# --- FIX: Add the project root directory to the Python path ---
+# This makes imports like `from src.retrieval...` work reliably.
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, PROJECT_ROOT)
 
-from src.retrieval.retrieval_module import EvidenceRetriever
-from src.detection.detection_module import HallucinationDetector
+# --- FIX: Import from the package level, not the specific module file ---
+# This relies on the __init__.py files being set up correctly.
+from src.retrieval import EvidenceRetriever
+from src.detection import HallucinationDetector
 
 # Load environment variables
 load_dotenv()
@@ -63,13 +67,12 @@ def test_complete_pipeline() -> bool:
             # Step 1: Retrieve evidence
             logger.info("Step 1: Retrieving evidence...")
             evidence = retriever.retrieve_evidence(scenario['question'])
-            logger.info(f"Retrieved {len(evidence)} evidence documents.")
+            logger.info(f"Retrieved {len(evidence)} evidence passages.")
             
             # Step 2: Detecting hallucinations...
             result = detector.detect_hallucination(scenario['answer'], evidence)
             
             # Step 3: Check result
-            # Convert the DetectionResult object to a dictionary for logging/summary
             result_dict = {
                 "is_hallucination": result.is_hallucination,
                 "confidence_score": result.confidence_score,
@@ -118,8 +121,12 @@ def run_interactive_mode():
             logger.info("\n--- Running Pipeline ---")
             logger.info("Step 1: Retrieving evidence...")
             evidence = retriever.retrieve_evidence(question)
-            logger.info(f"Retrieved {len(evidence)} evidence documents.")
+            logger.info(f"Retrieved {len(evidence)} evidence passages.")
             
+            if not evidence:
+                logger.warning("Could not find any evidence. Cannot perform detection.")
+                continue
+
             logger.info("\nStep 2: Detecting hallucinations...")
             result = detector.detect_hallucination(answer, evidence)
 
@@ -129,8 +136,10 @@ def run_interactive_mode():
             else:
                 logger.info(f"✅  Result: NO HALLUCINATION DETECTED")
             
-            logger.info(f"   - Method: {result.detection_method}")
-            logger.info(f"   - Confidence Score: {result.confidence_score:.3f}")
+            logger.info(f"  - Method: {result.detection_method}")
+            logger.info(f"  - Confidence Score: {result.confidence_score:.3f}")
+            if result.details:
+                logger.info(f"  - Details: {result.details}")
             logger.info("----------------\n")
 
     except Exception as e:
@@ -163,12 +172,6 @@ def print_summary(results: List[Dict[str, Any]]):
             logger.warning(f"    - Answer: '{r['raw_answer']}'")
             logger.warning(f"    - Expected: Hallucination={r['expected_hallucination']}")
             logger.warning(f"    - Actual: Hallucination={r['is_hallucination']} (Method: {r['detection_method']}, Score: {r['confidence_score']:.3f})")
-
-def test_individual_components():
-    """Placeholder for individual component tests."""
-    logger.info("\n" + "=" * 60)
-    logger.info("Individual component tests are not implemented in this script.")
-    logger.info("=" * 60)
 
 def main():
     """Run all tests and exit with a status code."""

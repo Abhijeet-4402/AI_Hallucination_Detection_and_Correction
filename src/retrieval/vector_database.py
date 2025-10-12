@@ -2,14 +2,15 @@
 Vector Database Implementation using ChromaDB
 
 This module handles the storage and retrieval of text embeddings
-using ChromaDB for efficient semantic search.
+using ChromaDB for efficient semantic search. It now uses deterministic IDs
+to prevent duplicate document entries.
 """
 
 import chromadb
 from chromadb.config import Settings
 import logging
 from typing import List, Dict, Any, Optional
-import uuid
+import hashlib
 import os
 
 # Configure logging
@@ -55,7 +56,8 @@ class VectorDatabase:
     
     def add_documents(self, documents: List[str], metadatas: Optional[List[Dict[str, Any]]] = None) -> List[str]:
         """
-        Add documents to the vector database
+        Add or update documents in the vector database using a deterministic ID.
+        This prevents the creation of duplicate documents.
         
         Args:
             documents: List of document texts
@@ -68,24 +70,26 @@ class VectorDatabase:
             logger.warning("No documents provided to add")
             return []
         
-        # Generate unique IDs for documents
-        doc_ids = [str(uuid.uuid4()) for _ in documents]
+        # **IMPROVEMENT**: Generate deterministic IDs from a hash of the document content.
+        # This ensures that the same document always gets the same ID.
+        doc_ids = [hashlib.md5(doc.encode()).hexdigest() for doc in documents]
         
-        # Prepare metadata
+        # Prepare metadata if not provided
         if metadatas is None:
-            metadatas = [{"source": "wikipedia", "index": i} for i in range(len(documents))]
+            metadatas = [{"source": "unknown"} for _ in documents]
         
         try:
-            logger.info(f"Adding {len(documents)} documents to vector database")
-            self.collection.add(
+            logger.info(f"Upserting {len(documents)} documents to vector database")
+            # **IMPROVEMENT**: Use upsert() to add new documents or update existing ones.
+            self.collection.upsert(
                 documents=documents,
                 metadatas=metadatas,
                 ids=doc_ids
             )
-            logger.info("Documents added successfully")
+            logger.info("Documents upserted successfully")
             return doc_ids
         except Exception as e:
-            logger.error(f"Error adding documents: {e}")
+            logger.error(f"Error upserting documents: {e}")
             return []
     
     def search_similar(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
@@ -100,10 +104,18 @@ class VectorDatabase:
             List of similar documents with metadata
         """
         try:
-            logger.info(f"Searching for similar documents to: {query[:100]}...")
+            # Ensure n_results does not exceed the number of items in the collection
+            count = self.collection.count()
+            if count == 0:
+                logger.warning("Search attempted on an empty collection.")
+                return []
+            
+            effective_n_results = min(n_results, count)
+
+            logger.info(f"Searching for {effective_n_results} similar documents to: {query[:100]}...")
             results = self.collection.query(
                 query_texts=[query],
-                n_results=n_results
+                n_results=effective_n_results
             )
             
             # Format results

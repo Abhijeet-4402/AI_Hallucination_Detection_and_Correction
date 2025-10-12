@@ -1,10 +1,13 @@
 """
-Core Detection Logic for AI Hallucination Detection
+Core Detection Logic for AI Hallucination Detection (Optimized with Batching)
 
-This module implements the two-step hallucination detection process:
-1. Semantic Similarity Check using sentence transformers
-2. Natural Language Inference (NLI) for contradiction detection
+This module implements a robust, claim-level, three-step hallucination detection process.
+NLI inference is now batched for significant performance improvement.
 """
+
+# FIX: This import MUST be at the top of the file.
+# It solves the NameError by letting Python handle type hints more flexibly.
+from __future__ import annotations
 
 import numpy as np
 from typing import List, Tuple, Dict, Any
@@ -20,170 +23,140 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # Download the necessary NLTK tokenizer models if they are not already present.
-# This prevents LookupError during runtime.
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     logger.info("NLTK 'punkt' resource not found. Downloading...")
     nltk.download('punkt')
 
-# The traceback indicates that 'punkt_tab' is also required by the tokenizer.
-try:
-    nltk.data.find('tokenizers/punkt_tab')
-except LookupError:
-    logger.info("NLTK 'punkt_tab' resource not found. Downloading...")
-    nltk.download('punkt_tab')
-
 
 class DetectionResult:
-    """Container for detection results"""
-    def __init__(self, is_hallucination: bool, confidence_score: float, 
-                 detection_method: str, raw_answer: str, evidence_docs: List[str]):
+    """Container for detection results with detailed analysis."""
+    def __init__(self, is_hallucination: bool, confidence_score: float,
+                 detection_method: str, raw_answer: str, evidence_docs: List[str],
+                 details: Dict[str, Any] = None):
         self.is_hallucination = is_hallucination
         self.confidence_score = confidence_score
         self.detection_method = detection_method
         self.raw_answer = raw_answer
         self.evidence_docs = evidence_docs
-    
+        self.details = details or {}
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for easy serialization"""
+        """Convert to dictionary for easy serialization."""
         return {
             'is_hallucination': self.is_hallucination,
             'confidence_score': self.confidence_score,
             'detection_method': self.detection_method,
             'raw_answer': self.raw_answer,
-            'evidence_docs': self.evidence_docs
+            'evidence_docs': self.evidence_docs,
+            'details': self.details
         }
 
 class HallucinationDetector:
-    """Main class for hallucination detection"""
-    
-    def __init__(self, 
+    """Main class for hallucination detection with batched NLI inference."""
+
+    def __init__(self,
                  similarity_model: str = "all-MiniLM-L6-v2",
                  nli_model: str = "roberta-large-mnli",
                  similarity_threshold: float = 0.5,
                  contradiction_threshold: float = 0.98,
-                 entailment_threshold: float = 0.95, # New threshold for positive confirmation
+                 entailment_threshold: float = 0.92,
                  device: str = "cpu"):
-        """
-        Initialize the HallucinationDetector
-        
-        Args:
-            similarity_model: Sentence-transformer model for similarity
-            nli_model: NLI model for contradiction detection
-            similarity_threshold: Threshold below which an answer is a hallucination
-            contradiction_threshold: NLI score above which an answer is a contradiction
-            entailment_threshold: NLI score above which an answer is confirmed by evidence
-            device: "cpu" or "cuda"
-        """
+
         self.similarity_model_name = similarity_model
         self.nli_model_name = nli_model
         self.similarity_threshold = similarity_threshold
         self.contradiction_threshold = contradiction_threshold
-        self.entailment_threshold = entailment_threshold # Store the new threshold
-        self.device = device
+        self.entailment_threshold = entailment_threshold
+        self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self._load_models(similarity_model, nli_model)
 
-    def detect_hallucination(self, answer: str, evidence_docs: List[str]) -> DetectionResult:
-        """
-        Detects if an answer is a hallucination based on evidence using an entailment-first approach.
-        """
-        if not evidence_docs:
-            logger.warning("No evidence provided. Cannot verify answer.")
-            return DetectionResult(True, 1.0, "no_evidence", answer, [])
-
-        # NLI model output order is [contradiction, neutral, entailment]
-        ENTAILMENT_INDEX = 2
-        CONTRADICTION_INDEX = 0
-
-        # 1. Check for Entailment (Positive Confirmation) first
-        for doc in evidence_docs:
-            sentences = sent_tokenize(doc)
-            for sentence in sentences:
-                premise = sentence
-                hypothesis = answer
-                
-                tokenized_input = self.nli_tokenizer(premise, hypothesis, return_tensors='pt', truncation=True, max_length=512).to(self.device)
-                with torch.no_grad():
-                    logits = self.nli_model(**tokenized_input).logits
-                
-                probs = torch.softmax(logits, dim=1)[0]
-                entailment_prob = probs[ENTAILMENT_INDEX].item()
-
-                if entailment_prob > self.entailment_threshold:
-                    logger.info(f"Entailment detected with score {entailment_prob:.3f}. The answer is supported by evidence.")
-                    return DetectionResult(False, entailment_prob, "entailment", answer, evidence_docs)
-
-        # 2. If no entailment, check for Contradiction
-        for doc in evidence_docs:
-            sentences = sent_tokenize(doc)
-            for sentence in sentences:
-                premise = sentence
-                hypothesis = answer
-                
-                tokenized_input = self.nli_tokenizer(premise, hypothesis, return_tensors='pt', truncation=True, max_length=512).to(self.device)
-                with torch.no_grad():
-                    logits = self.nli_model(**tokenized_input).logits
-                
-                probs = torch.softmax(logits, dim=1)[0]
-                contradiction_prob = probs[CONTRADICTION_INDEX].item()
-                
-                if contradiction_prob > self.contradiction_threshold:
-                    logger.info(f"Contradiction detected with score {contradiction_prob:.3f}")
-                    return DetectionResult(True, contradiction_prob, "contradiction", answer, evidence_docs)
-
-        # 3. If no strong NLI signal, fall back to semantic similarity
-        combined_evidence = "\n".join(evidence_docs)
-        answer_embedding = self.similarity_model.encode(answer, convert_to_tensor=True)
-        evidence_embedding = self.similarity_model.encode(combined_evidence, convert_to_tensor=True)
-        
-        similarity_score = util.pytorch_cos_sim(answer_embedding, evidence_embedding).item()
-        
-        if similarity_score < self.similarity_threshold:
-            logger.info(f"Low similarity detected. Score: {similarity_score:.3f}")
-            return DetectionResult(True, 1 - similarity_score, "low_similarity", answer, evidence_docs)
-            
-        # 4. If all checks pass, it's not a hallucination
-        logger.info(f"No strong hallucination signal found. Similarity score: {similarity_score:.3f}")
-        return DetectionResult(False, similarity_score, "no_hallucination", answer, evidence_docs)
+        self.CONTRADICTION_INDEX = 0
+        self.ENTAILMENT_INDEX = 2
 
     def _load_models(self, similarity_model_name: str, nli_model_name: str):
-        """Load the required ML models"""
+        """Load the required ML models."""
         try:
             logger.info(f"Loading semantic similarity model: {similarity_model_name}")
-            self.similarity_model = SentenceTransformer(similarity_model_name)
-            
+            self.similarity_model = SentenceTransformer(similarity_model_name, device=self.device)
+
             logger.info(f"Loading NLI model: {nli_model_name}")
             self.nli_tokenizer = AutoTokenizer.from_pretrained(nli_model_name)
             self.nli_model = AutoModelForSequenceClassification.from_pretrained(nli_model_name).to(self.device)
-            
+            self.nli_model.eval() # Set model to evaluation mode
+
             logger.info("Models loaded successfully!")
-            
+
         except Exception as e:
             logger.error(f"Error loading models: {e}")
             raise
 
-# Global detector instance
-_detector = None
+    def detect_hallucination(self, answer: str, evidence_docs: List[str]) -> DetectionResult:
+        """
+        Detects hallucination using an efficient batched NLI workflow.
+        """
+        if not answer.strip():
+            return DetectionResult(False, 1.0, "empty_answer", answer, evidence_docs, details={"reason": "Answer was empty."})
 
-def get_detector() -> HallucinationDetector:
-    """Get or create the global detector instance"""
-    global _detector
-    if _detector is None:
-        _detector = HallucinationDetector()
-    return _detector
+        if not evidence_docs:
+            return DetectionResult(True, 1.0, "no_evidence", answer, [], details={"reason": "No evidence documents were provided."})
 
-def detect_hallucination(raw_answer: str, evidence_docs: List[str]) -> Tuple[bool, float]:
-    """
-    Convenience function for the main detection logic
-    
-    Args:
-        raw_answer: The generated answer to check
-        evidence_docs: List of evidence documents
-        
-    Returns:
-        Tuple of (is_hallucination, confidence_score)
-    """
-    detector = get_detector()
-    result = detector.detect_hallucination(raw_answer, evidence_docs)
-    return result.is_hallucination, result.confidence_score
+        answer_claims = sent_tokenize(answer)
+        all_evidence_sentences = [sent for doc in evidence_docs for sent in sent_tokenize(doc) if sent.strip()]
+
+        if not all_evidence_sentences:
+            return DetectionResult(True, 1.0, "no_evidence", answer, evidence_docs, details={"reason": "Evidence documents contain no text."})
+
+        for claim in answer_claims:
+            # --- Step 1 & 2: Batched NLI Check ---
+            nli_pairs = [(evidence_sent, claim) for evidence_sent in all_evidence_sentences]
+
+            if not nli_pairs: continue
+
+            tokenized_input = self.nli_tokenizer(nli_pairs, padding=True, truncation=True, return_tensors="pt", max_length=512).to(self.device)
+
+            with torch.no_grad():
+                logits = self.nli_model(**tokenized_input).logits
+
+            all_probs = torch.softmax(logits, dim=1)
+            entailment_probs = all_probs[:, self.ENTAILMENT_INDEX]
+            contradiction_probs = all_probs[:, self.CONTRADICTION_INDEX]
+
+            max_entailment_score, _ = torch.max(entailment_probs, dim=0)
+            if max_entailment_score.item() > self.entailment_threshold:
+                logger.info(f"Claim successfully verified by NLI entailment: '{claim}'")
+                continue
+
+            max_contradiction_score, max_contradiction_idx = torch.max(contradiction_probs, dim=0)
+            if max_contradiction_score.item() > self.contradiction_threshold:
+                details = {
+                    "problem_claim": claim,
+                    "contradictory_evidence": all_evidence_sentences[max_contradiction_idx],
+                    "contradiction_score": max_contradiction_score.item(),
+                }
+                logger.warning(f"Contradiction detected for claim: '{claim}'")
+                return DetectionResult(True, max_contradiction_score.item(), "contradiction", answer, evidence_docs, details)
+
+            # --- Step 3: Fallback to Semantic Similarity ---
+            claim_embedding = self.similarity_model.encode(claim, convert_to_tensor=True)
+            evidence_embeddings = self.similarity_model.encode(all_evidence_sentences, convert_to_tensor=True)
+
+            similarity_scores = util.pytorch_cos_sim(claim_embedding, evidence_embeddings)[0]
+            max_similarity_score = torch.max(similarity_scores).item()
+
+            if max_similarity_score < self.similarity_threshold:
+                details = {
+                    "problem_claim": claim,
+                    "reason": "Low similarity to all evidence.",
+                    "max_similarity_score": max_similarity_score,
+                    "closest_evidence": all_evidence_sentences[torch.argmax(similarity_scores).item()]
+                }
+                logger.warning(f"Unsupported claim due to low similarity: '{claim}'")
+                return DetectionResult(True, 1 - max_similarity_score, "low_similarity", answer, evidence_docs, details)
+
+            logger.info(f"Claim considered supported by similarity: '{claim}' (Score: {max_similarity_score:.3f})")
+
+        details = {"reason": "All claims in the answer were successfully verified against the evidence."}
+        logger.info("Answer verified. No hallucination detected.")
+        return DetectionResult(False, 1.0, "verified", answer, evidence_docs, details)
