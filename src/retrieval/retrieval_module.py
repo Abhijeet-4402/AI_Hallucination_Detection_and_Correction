@@ -9,7 +9,7 @@ process:
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List
 from sentence_transformers import SentenceTransformer, util
 from nltk.tokenize import sent_tokenize
 import nltk
@@ -28,22 +28,23 @@ except LookupError:
     logger.info("NLTK 'punkt' resource not found. Downloading...")
     nltk.download('punkt')
 
+
 class EvidenceRetriever:
     """Main class for evidence retrieval and management"""
-    
+
     def __init__(self, 
                  embedding_model: str = "all-MiniLM-L6-v2",
                  max_evidence_docs: int = 5,
                  similarity_threshold: float = 0.5):
         self.max_evidence_docs = max_evidence_docs
         self.similarity_threshold = similarity_threshold
-        
+
         self.wikipedia_retriever = WikipediaRetriever(max_results=max_evidence_docs)
         self.vector_db = VectorDatabase()
         self.embedding_model = None
-        
+
         self._load_embedding_model(embedding_model)
-    
+
     def _load_embedding_model(self, model_name: str):
         try:
             logger.info(f"Loading embedding model: {model_name}")
@@ -52,7 +53,7 @@ class EvidenceRetriever:
         except Exception as e:
             logger.error(f"Error loading embedding model: {e}")
             raise
-    
+
     def _calculate_similarity(self, query: str, documents: List[str]) -> List[float]:
         if not documents or not self.embedding_model:
             return []
@@ -70,7 +71,7 @@ class EvidenceRetriever:
         sentences = sent_tokenize(doc)
         if not sentences:
             return []
-            
+
         chunks = []
         step = sentences_per_chunk - overlap
         for i in range(0, len(sentences), step):
@@ -85,7 +86,7 @@ class EvidenceRetriever:
         and reranking the passages to find the most relevant snippets.
         """
         logger.info(f"Starting evidence retrieval for question: {question}")
-        
+
         all_docs = {}
 
         # Step 1: Gather Full Candidate Documents
@@ -97,9 +98,9 @@ class EvidenceRetriever:
             logger.error(f"Error retrieving from Wikipedia: {e}")
 
         if use_cached:
-            # (Caching logic remains the same)
-            pass 
-        
+            # Placeholder for caching logic
+            pass
+
         unique_docs = list(all_docs.keys())
         if not unique_docs:
             return []
@@ -113,25 +114,31 @@ class EvidenceRetriever:
         if not all_passages:
             logger.warning("Could not extract any valid passages from the retrieved documents.")
             return []
-        
+
         logger.info(f"Extracted {len(all_passages)} passages for reranking.")
 
         # Step 3: Rerank Passages and Select the Best
         similarities = self._calculate_similarity(question, all_passages)
         passage_sim_pairs = list(zip(all_passages, similarities))
-        
-        relevant_pairs = [(passage, sim) for passage, sim in passage_sim_pairs if sim >= self.similarity_threshold]
-        
+
+        relevant_pairs = [(p, s) for p, s in passage_sim_pairs if s >= self.similarity_threshold]
+
         if not relevant_pairs:
             logger.warning(f"No passages met the similarity threshold of {self.similarity_threshold}")
             return []
 
         relevant_pairs.sort(key=lambda x: x[1], reverse=True)
+        final_evidence = [p for p, _ in relevant_pairs[:self.max_evidence_docs]]
 
-        final_evidence = [passage for passage, sim in relevant_pairs[:self.max_evidence_docs]]
-        
-        # Step 4: Cache the original documents
-        # (Caching logic remains the same)
-        
         logger.info(f"Retrieved {len(final_evidence)} final evidence passages after reranking.")
         return final_evidence
+
+
+# ✅ Separate convenience function (OUTSIDE the class)
+def retrieve_evidence(question: str):
+    """
+    Convenience function to quickly fetch evidence documents
+    without manually instantiating the EvidenceRetriever.
+    """
+    retriever = EvidenceRetriever(max_evidence_docs=3, similarity_threshold=0.5)
+    return retriever.retrieve_evidence(question)
