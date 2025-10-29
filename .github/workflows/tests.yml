@@ -1,0 +1,55 @@
+name: Tests
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r AI_Hallucination_Detection_and_Correction/requirements.txt
+          pip install -r AI_Hallucination_Detection_and_Correction/tests/requirements.txt
+
+      - name: Run tests with coverage
+        working-directory: AI_Hallucination_Detection_and_Correction
+        run: |
+          pytest -v --cov=src --cov-report=xml --html=report.html --self-contained-html
+
+      - name: Upload coverage to Codecov
+        if: ${{ always() }}
+        uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: false
+          files: ./AI_Hallucination_Detection_and_Correction/coverage.xml
+          verbose: true
+
+      - name: Upload HTML report artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-html-report
+          path: AI_Hallucination_Detection_and_Correction/report.html
+

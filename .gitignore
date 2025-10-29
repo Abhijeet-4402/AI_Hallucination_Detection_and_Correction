@@ -1,3 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Venv
+venv/
+.venv/
+
+# Test outputs
+.pytest_cache/
+report.html
+coverage.xml
+
+# Data/DB
+chroma_db/
+hallucination_log.db
+
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/
+
 # Environment variables
 # Contains sensitive API keys and should NEVER be committed.
 .env

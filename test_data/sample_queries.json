@@ -1,0 +1,13 @@
+[
+  {
+    "question": "Who created Python?",
+    "raw_answer": "Python was created by Guido van Rossum.",
+    "expected_keywords": ["Python", "Guido", "Rossum"]
+  },
+  {
+    "question": "When was Apple founded?",
+    "raw_answer": "Apple was founded in 1876.",
+    "expected_fix": "1976"
+  }
+]
+
