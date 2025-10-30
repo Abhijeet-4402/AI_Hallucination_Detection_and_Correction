@@ -13,6 +13,7 @@ venv/
 # Test outputs
 .pytest_cache/
 report.html
+!reports/report.html
 coverage.xml
 
 # Data/DB
