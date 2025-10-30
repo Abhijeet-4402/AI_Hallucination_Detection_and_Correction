@@ -18,9 +18,12 @@ def test_pipeline_detection_then_correction(fake_sentence_transformer, fake_util
 
     # Detection: force contradiction for one claim
     import torch, types
+    class DummyBatch(dict):
+        def to(self, device):
+            return self
     mocker.patch(
         "detection.detection_module.AutoTokenizer.from_pretrained",
-        return_value=lambda pairs, **_: {"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)}
+        return_value=lambda pairs, **_: DummyBatch({"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)})
     )
     class FakeNLI:
         def to(self, device):
@@ -28,7 +31,7 @@ def test_pipeline_detection_then_correction(fake_sentence_transformer, fake_util
         def eval(self):
             return self
         def __call__(self, **_):
-            logits = torch.tensor([[0.999, 0.001, 0.001] for _ in range(5)])
+            logits = torch.tensor([[10.0, 0.0, 0.0] for _ in range(5)])
             return types.SimpleNamespace(logits=logits)
     mocker.patch("detection.detection_module.AutoModelForSequenceClassification.from_pretrained", return_value=FakeNLI())
 

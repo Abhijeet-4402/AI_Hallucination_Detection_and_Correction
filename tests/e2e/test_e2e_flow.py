@@ -17,9 +17,12 @@ def test_full_flow_html_report(fake_sentence_transformer, fake_util_cosine, patc
     assert evidence
 
     import torch, types
+    class DummyBatch(dict):
+        def to(self, device):
+            return self
     mocker.patch(
         "detection.detection_module.AutoTokenizer.from_pretrained",
-        return_value=lambda pairs, **_: {"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)}
+        return_value=lambda pairs, **_: DummyBatch({"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)})
     )
     class FakeNLI:
         def to(self, device):
@@ -49,7 +52,7 @@ def test_full_flow_html_report(fake_sentence_transformer, fake_util_cosine, patc
             pass
         def invoke(self, inputs):
             return {
-                "result": inputs["query"],
+                "result": "Python was created by Guido van Rossum.",
                 "source_documents": [type("D", (), {"page_content": evidence[0], "metadata": {}})()],
             }
     mocker.patch("correction.correction_module.RetrievalQA.from_chain_type", return_value=FakeChain())

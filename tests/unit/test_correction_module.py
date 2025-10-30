@@ -1,4 +1,5 @@
 import pytest
+import sys
 
 from correction import correction_module as cm
 
@@ -54,10 +55,9 @@ def test_correct_and_regenerate_with_mocks(tmp_path, monkeypatch, mocker):
     monkeypatch.setattr(cm, "DATABASE_NAME", str(db))
     cm.initialize_database()
 
-    # Mock LLM and RetrievalQA
+    # Patch correction module attributes directly
     class FakeLLM:
         pass
-
     mocker.patch("correction.correction_module.ChatGoogleGenerativeAI", return_value=FakeLLM())
 
     class FakeChain:
@@ -68,7 +68,6 @@ def test_correct_and_regenerate_with_mocks(tmp_path, monkeypatch, mocker):
                 "result": "Corrected text",
                 "source_documents": [type("D", (), {"page_content": "doc1", "metadata": {}})()],
             }
-
     mocker.patch("correction.correction_module.RetrievalQA.from_chain_type", return_value=FakeChain())
 
     out = cm.correct_and_regenerate("Q", "RAW", ["Ev1", "Ev2"])

@@ -143,7 +143,10 @@ def patch_chromadb(mocker):
             self._collections.pop(name, None)
 
     mocker.patch("retrieval.vector_database.chromadb.PersistentClient", FakeClient)
-    mocker.patch("retrieval.vector_database.Settings", object)
+    class DummySettings:
+        def __init__(self, **kwargs):
+            self._settings = kwargs
+    mocker.patch("retrieval.vector_database.Settings", DummySettings)
 
 
 @pytest.fixture()

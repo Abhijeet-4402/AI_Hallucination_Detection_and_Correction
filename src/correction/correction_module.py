@@ -8,6 +8,32 @@ load_dotenv()
 
 DATABASE_NAME = "hallucination_log.db"
 
+# Optional external dependencies placeholders for easier patching in tests
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogleGenerativeAI  # type: ignore
+except Exception:  # pragma: no cover - optional dep
+    class ChatGoogleGenerativeAI:  # type: ignore
+        pass
+
+try:
+    from langchain.chains import RetrievalQA as RetrievalQA  # type: ignore
+except Exception:  # pragma: no cover - optional dep
+    class RetrievalQA:  # type: ignore
+        @classmethod
+        def from_chain_type(cls, *args, **kwargs):
+            raise NotImplementedError
+
+try:
+    from langchain_core.retrievers import BaseRetriever as BaseRetriever  # type: ignore
+    from langchain.docstore.document import Document as Document  # type: ignore
+except Exception:  # pragma: no cover
+    class BaseRetriever:  # type: ignore
+        pass
+    class Document:  # type: ignore
+        def __init__(self, page_content: str, metadata: dict | None = None):
+            self.page_content = page_content
+            self.metadata = metadata or {}
+
 def initialize_database():
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
@@ -65,36 +91,8 @@ def log_hallucination_data(question: str, raw_answer: str, corrected_answer: str
         conn.close()
 
 def correct_and_regenerate(question: str, raw_answer: str, evidence: list) -> dict:
-    # Lazy imports to avoid hard dependency during module import and allow tests to mock
-    try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-    except Exception:
-        ChatGoogleGenerativeAI = None
-
-    try:
-        from langchain.chains import RetrievalQA
-    except Exception:
-        RetrievalQA = None
-
-    try:
-        from langchain_core.retrievers import BaseRetriever
-        from langchain.docstore.document import Document
-    except Exception:
-        # Minimal fallbacks to allow tests to run without langchain installed
-        class BaseRetriever:  # type: ignore
-            pass
-        class Document:  # type: ignore
-            def __init__(self, page_content: str, metadata: dict | None = None):
-                self.page_content = page_content
-                self.metadata = metadata or {}
-
-    # Initialize Google Generative AI model if available; otherwise create a stub object
-    if ChatGoogleGenerativeAI is not None:
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
-    else:
-        class _StubLLM:  # type: ignore
-            pass
-        llm = _StubLLM()
+    # Initialize Google Generative AI model
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)  # type: ignore
 
     class MockRetriever(BaseRetriever):
         def _get_relevant_documents(self, query):  # type: ignore
@@ -102,20 +100,17 @@ def correct_and_regenerate(question: str, raw_answer: str, evidence: list) -> di
 
     mock_retriever = MockRetriever()
 
-    if RetrievalQA is not None:
-        qa_chain = RetrievalQA.from_chain_type(
+    try:
+        qa_chain = RetrievalQA.from_chain_type(  # type: ignore
             llm=llm,
             chain_type="stuff",
             retriever=mock_retriever,
             return_source_documents=True
         )
         response = qa_chain.invoke({"query": question})
-    else:
-        # Minimal fallback behavior to keep function usable in tests without langchain
-        response = {
-            "result": raw_answer,
-            "source_documents": [Document(page_content=e) for e in evidence],
-        }
+    except Exception:
+        # Fallback behavior when langchain is unavailable
+        response = {"result": raw_answer, "source_documents": [Document(page_content=e) for e in evidence]}
     corrected_answer = response["result"]
     source_documents = response["source_documents"]
 

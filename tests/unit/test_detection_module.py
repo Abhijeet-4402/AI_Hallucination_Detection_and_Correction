@@ -5,10 +5,13 @@ from detection.detection_module import HallucinationDetector
 
 
 def _patch_nli_mock(mocker, entail: float, contra: float):
-    # Tokenizer returns simple dict of tensors
+    # Tokenizer returns a batch-like object supporting .to()
+    class DummyBatch(dict):
+        def to(self, device):
+            return self
     mocker.patch(
         "detection.detection_module.AutoTokenizer.from_pretrained",
-        return_value=lambda pairs, **_: {"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)}
+        return_value=lambda pairs, **_: DummyBatch({"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)})
     )
 
     class FakeNLI:
@@ -17,10 +20,6 @@ def _patch_nli_mock(mocker, entail: float, contra: float):
 
         def eval(self):
             return self
-
-        @property
-        def logits(self):
-            return None
 
         def __call__(self, **_):
             # 3-class: [contradiction, neutral, entailment]
@@ -54,7 +53,7 @@ def test_detect_no_evidence(fake_sentence_transformer, fake_util_cosine, patch_n
 
 @pytest.mark.unit
 def test_detect_contradiction(fake_sentence_transformer, fake_util_cosine, patch_nltk_tokenize, mocker):
-    _patch_nli_mock(mocker, entail=0.1, contra=0.999)
+    _patch_nli_mock(mocker, entail=0.0, contra=10.0)
     det = HallucinationDetector(contradiction_threshold=0.98, entailment_threshold=0.99, device="cpu")
     res = det.detect_hallucination("Claim A.", ["E1.", "E2."])
     assert res.is_hallucination is True
@@ -75,9 +74,12 @@ def test_detect_verified(fake_sentence_transformer, patch_nltk_tokenize, mocker)
     # Force entailment above threshold
     import types
 
+    class DummyBatch(dict):
+        def to(self, device):
+            return self
     mocker.patch(
         "detection.detection_module.AutoTokenizer.from_pretrained",
-        return_value=lambda pairs, **_: {"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)}
+        return_value=lambda pairs, **_: DummyBatch({"input_ids": torch.zeros((len(pairs), 10), dtype=torch.long)})
     )
 
     class FakeNLI:
