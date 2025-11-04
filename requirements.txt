@@ -1,6 +1,7 @@
 # Core AI and ML libraries
 langchain
 langchain-google-genai
+google-generativeai
 sentence-transformers
 transformers
 torch

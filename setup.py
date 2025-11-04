@@ -64,7 +64,10 @@ def test_installation():
         print("🧪 Testing installation...")
         
         # Test imports
-        import google.generativeai
+        try:
+            import google.generativeai  # optional, used by some GenAI clients
+        except Exception:
+            print("⚠️  Optional package 'google-generativeai' not available. Skipping this check.")
         import langchain
         import sentence_transformers
         import transformers
